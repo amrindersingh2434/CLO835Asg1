@@ -1,119 +1,124 @@
 from flask import Flask, render_template, request
 from pymysql import connections
 import os
-import random
-import argparse
+import boto3
+import logging
 
 app = Flask(__name__)
 
-DBHOST = os.environ.get("DBHOST", "mysql")
-DBUSER = os.environ.get("DBUSER", "root")
-DBPWD = os.environ.get("DBPWD", "password")
-DATABASE = os.environ.get("DATABASE", "employees")
-DBPORT = int(os.environ.get("DBPORT", 3306))
+DBHOST    = os.environ.get("DBHOST")    or "localhost"
+DBUSER    = os.environ.get("DBUSER")    or "root"
+DBPWD     = os.environ.get("DBPWD")     or "password"
+DATABASE  = os.environ.get("DATABASE")  or "employees"
+DBPORT    = int(os.environ.get("DBPORT", 3306))
 
-COLOR_FROM_ENV = os.environ.get("APP_COLOR")
+STUDENT_NAME   = os.environ.get("STUDENT_NAME")  or "Student"
+BG_IMAGE_URL   = os.environ.get("BG_IMAGE_URL")  or ""   # s3://bucket/image.jpg
+BG_LOCAL_PATH  = "/app/static/bg.jpg"
 
-color_codes = {
-    "red": "#e74c3c",
-    "green": "#16a085",
-    "blue": "#89CFF0",
-    "blue2": "#30336b",
-    "pink": "#f4c2c2",
-    "darkblue": "#130f40",
-    "lime": "#C1FF9C",
-}
-
-SUPPORTED_COLORS = ",".join(color_codes.keys())
-COLOR = random.choice(list(color_codes.keys()))
-
-try:
-    db_conn = connections.Connection(
-        host=DBHOST,
-        port=DBPORT,
-        user=DBUSER,
-        password=DBPWD,
-        db=DATABASE
-    )
-except Exception as e:
-    print("Database connection failed:", e)
-    db_conn = None
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
-@app.route("/")
+def download_bg_image():
+    if not BG_IMAGE_URL:
+        logger.warning("BG_IMAGE_URL not set — no background image will be used.")
+        return
+
+    logger.info("Background image URL: %s", BG_IMAGE_URL)
+
+    path = BG_IMAGE_URL.replace("s3://", "")
+    bucket, key = path.split("/", 1)
+
+    try:
+        s3 = boto3.client("s3")
+        os.makedirs(os.path.dirname(BG_LOCAL_PATH), exist_ok=True)
+        s3.download_file(bucket, key, BG_LOCAL_PATH)
+        logger.info("Background image downloaded to %s", BG_LOCAL_PATH)
+    except Exception as e:
+        logger.error("Failed to download background image: %s", e)
+
+
+download_bg_image()
+
+db_conn = connections.Connection(
+    host=DBHOST,
+    port=DBPORT,
+    user=DBUSER,
+    password=DBPWD,
+    db=DATABASE,
+)
+
+table = "employee"
+
+
+@app.route("/", methods=["GET", "POST"])
 def home():
-    return render_template("addemp.html", color=color_codes[COLOR])
+    return render_template("addemp.html", student_name=STUDENT_NAME)
 
 
-@app.route("/about")
+@app.route("/about", methods=["GET", "POST"])
 def about():
-    return render_template("about.html", color=color_codes[COLOR])
+    return render_template("about.html", student_name=STUDENT_NAME)
 
 
 @app.route("/addemp", methods=["POST"])
-def add_emp():
+def AddEmp():
+    emp_id        = request.form["emp_id"]
+    first_name    = request.form["first_name"]
+    last_name     = request.form["last_name"]
+    primary_skill = request.form["primary_skill"]
+    location      = request.form["location"]
+
+    insert_sql = "INSERT INTO employee VALUES (%s, %s, %s, %s, %s)"
     cursor = db_conn.cursor()
     try:
-        cursor.execute(
-            "INSERT INTO employee VALUES (%s,%s,%s,%s,%s)",
-            (
-                request.form["emp_id"],
-                request.form["first_name"],
-                request.form["last_name"],
-                request.form["primary_skill"],
-                request.form["location"],
-            ),
-        )
+        cursor.execute(insert_sql, (emp_id, first_name, last_name, primary_skill, location))
         db_conn.commit()
+        emp_name = f"{first_name} {last_name}"
     finally:
         cursor.close()
 
-    return render_template("addempoutput.html",
-                           name=request.form["first_name"],
-                           color=color_codes[COLOR])
+    return render_template("addempoutput.html", name=emp_name, student_name=STUDENT_NAME)
 
 
-@app.route("/getemp")
-def get_emp():
-    return render_template("getemp.html", color=color_codes[COLOR])
+@app.route("/getemp", methods=["GET", "POST"])
+def GetEmp():
+    return render_template("getemp.html", student_name=STUDENT_NAME)
 
 
-@app.route("/fetchdata", methods=["POST"])
-def fetch_data():
-    cursor = db_conn.cursor()
-    cursor.execute(
-        "SELECT emp_id, first_name, last_name, primary_skill, location FROM employee WHERE emp_id=%s",
-        (request.form["emp_id"],)
+@app.route("/fetchdata", methods=["GET", "POST"])
+def FetchData():
+    emp_id = request.form["emp_id"]
+    output = {}
+    select_sql = (
+        "SELECT emp_id, first_name, last_name, primary_skill, location "
+        "FROM employee WHERE emp_id=%s"
     )
-    result = cursor.fetchone()
-    cursor.close()
-
-    if not result:
-        return "Employee not found", 404
+    cursor = db_conn.cursor()
+    try:
+        cursor.execute(select_sql, (emp_id,))
+        result = cursor.fetchone()
+        output["emp_id"]        = result[0]
+        output["first_name"]    = result[1]
+        output["last_name"]     = result[2]
+        output["primary_skills"] = result[3]
+        output["location"]      = result[4]
+    except Exception as e:
+        logger.error("DB fetch error: %s", e)
+    finally:
+        cursor.close()
 
     return render_template(
         "getempoutput.html",
-        id=result[0],
-        fname=result[1],
-        lname=result[2],
-        interest=result[3],
-        location=result[4],
-        color=color_codes[COLOR],
+        id=output["emp_id"],
+        fname=output["first_name"],
+        lname=output["last_name"],
+        interest=output["primary_skills"],
+        location=output["location"],
+        student_name=STUDENT_NAME,
     )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--color")
-    args = parser.parse_args()
-
-    if args.color:
-        COLOR = args.color
-    elif COLOR_FROM_ENV:
-        COLOR = COLOR_FROM_ENV
-
-    if COLOR not in color_codes:
-        print(f"Unsupported color {COLOR}. Use one of {SUPPORTED_COLORS}")
-        exit(1)
-
-    app.run(host="0.0.0.0", port=8080)
+    app.run(host="0.0.0.0", port=81, debug=True)
