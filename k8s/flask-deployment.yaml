@@ -16,7 +16,7 @@ spec:
       serviceAccountName: clo835
       containers:
         - name: flask-app
-          image: 096395041427.dkr.ecr.us-east-1.amazonaws.com/clo835-app:latest
+          image: 225180847770.dkr.ecr.us-east-1.amazonaws.com/clo835-app:latest
           ports:
             - containerPort: 81
           env:
