@@ -5,7 +5,7 @@ metadata:
   namespace: final
 data:
 
-  STUDENT_NAME: "Ankush; Eldar; Oyinkansola"
+  STUDENT_NAME: "Amrinder; Akash; Shadhana"
 
   BG_IMAGE_URL: "s3://clo835-group6-096395041427/background.jpg"
 
